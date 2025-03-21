@@ -482,11 +482,6 @@ func run(settingsFileName string, serialName string) error {
 	}
 
 	// MACアドレスからIPv6リンクローカルアドレスへ変換する
-	mac8 := [8]byte{}
-	_, err = binary.Encode(mac8[:], binary.BigEndian, macAddress)
-	if err != nil {
-		return err
-	}
 	// MACアドレスの最初の1バイト下位2bit目を反転して
 	// 0xFE80000000000000XXXXXXXXXXXXXXXXのXXをMACアドレスに置き換える
 	address16 := [16]byte{}
