@@ -45,7 +45,7 @@ func getElCumlativeWattHour() []byte {
 		0x02, 0x88, 0x01, // smartmeter
 		0x62, // get要求
 		0x01, // 1つ
-		0xe0, // 積算電力量計測値
+		0xe0, // 積算電力量計測値(正方向計測値)
 		0x00, // 送信するデータ無し
 	}
 }
@@ -544,6 +544,37 @@ func run(settingsFileName string, serialName string) error {
 		}
 	}()
 
+	// あいさつ代わりにスマートメータの属性を取得してみる
+	if true {
+		elSmartmeterProps := []EchonetliteEdata{
+			// go言語では初期値0なのでpdc,edtは省略する
+			{epc: 0x80}, // 動作状態
+			{epc: 0x81}, // 設置場所
+			{epc: 0x88}, // 異常発生状態
+			{epc: 0x8a}, // メーカーコード
+			{epc: 0xd3}, // 係数
+			{epc: 0xd7}, // 積算電力量有効桁数
+			{epc: 0xe1}, // 積算電力量単位(正方向、逆方向計測値)
+		}
+		for _, item := range elSmartmeterProps {
+			elFrame := EchonetliteFrame{
+				ehd:   0x1081,
+				tid:   0x0001,
+				seoj:  [3]byte{0x05, 0xff, 0x01}, // home controller
+				deoj:  [3]byte{0x02, 0x88, 0x01}, // smartmeter
+				esv:   0x62,                      // get要求
+				opc:   0x01,                      // 1つ
+				edata: []EchonetliteEdata{item},
+			}
+			buf := elFrame.Encode()
+			err := transmit(conn, buf)
+			if err != nil {
+				return err
+			}
+			time.Sleep(1000 * time.Millisecond)
+		}
+	}
+
 	// 積算電力量を得る
 	err = transmit(conn, getElCumlativeWattHour())
 	if err != nil {
@@ -698,12 +729,12 @@ func readJ11ProtocolDatagram(ctx context.Context, rd io.Reader) (*J11Datagram, e
 	for preamble != UniqueCodeResponseCommand {
 		var b [1]byte
 		_, err := rd.Read(b[:])
-		if err == io.EOF {
+		if err == io.EOF { // 読み取りデータ不足
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			default:
-				continue // 読み取りデータ不足
+				continue
 			}
 		} else if err != nil {
 			return nil, err
@@ -715,12 +746,12 @@ func readJ11ProtocolDatagram(ctx context.Context, rd io.Reader) (*J11Datagram, e
 	binary.BigEndian.PutUint32(buf[:], preamble)
 	for i := 4; i < J11DatagramHeaderBytes; {
 		n, err := rd.Read(buf[i:])
-		if err == io.EOF {
+		if err == io.EOF { // 読み取りデータ不足
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			default:
-				continue // 読み取りデータ不足
+				continue
 			}
 		} else if err != nil {
 			return nil, err
@@ -743,12 +774,12 @@ func readJ11ProtocolDatagram(ctx context.Context, rd io.Reader) (*J11Datagram, e
 	data := make([]byte, dataBytes)
 	for i := 0; i < int(dataBytes); {
 		n, err := rd.Read(data[i:])
-		if err == io.EOF {
+		if err == io.EOF { // 読み取りデータ不足
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			default:
-				continue // 読み取りデータ不足
+				continue
 			}
 		} else if err != nil {
 			return nil, err

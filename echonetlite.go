@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 )
 
@@ -21,10 +22,30 @@ type EchonetliteFrame struct {
 	edata []EchonetliteEdata
 }
 
+func (e EchonetliteFrame) Encode() []byte {
+	var b []byte
+	b = binary.BigEndian.AppendUint16(b, e.ehd)
+	b = binary.BigEndian.AppendUint16(b, e.tid)
+	b = append(b, e.seoj[:]...)
+	b = append(b, e.deoj[:]...)
+	b = append(b, e.esv, e.opc)
+	for _, v := range e.edata {
+		b = append(b, v.Encode()...)
+	}
+	return b
+}
+
 type EchonetliteEdata struct {
 	epc byte
 	pdc byte
 	edt []byte
+}
+
+func (e EchonetliteEdata) Encode() []byte {
+	var b []byte
+	b = append(b, e.epc, e.pdc)
+	b = append(b, e.edt...)
+	return b
 }
 
 func ParseEchonetliteFrame(data []byte) (EchonetliteFrame, error) {
@@ -78,32 +99,85 @@ func ShowEchonetliteFrame(frame EchonetliteFrame) {
 
 func ShowEdataGetResponse(edata EchonetliteEdata) {
 	switch edata.epc {
-	case 0xe0: // 積算電力量計測値
+	case 0x80: // 動作状態
+		switch edata.edt[0] {
+		case 0x30:
+			slog.Info("動作中")
+		case 0x31:
+			slog.Info("未動作")
+		default:
+			slog.Info("N/A")
+		}
+	case 0x81: // 設置場所
+	case 0x88: // 異常発生状態
+		switch edata.edt[0] {
+		case 0x41:
+			slog.Info("異常発生あり")
+		case 0x42:
+			slog.Info("異常発生なし")
+		default:
+			slog.Info("N/A")
+		}
+	case 0x8a: // メーカーコード
+		manufacturer := [3]byte{}
+		copy(manufacturer[:], edata.edt)
+		slog.Info("製造者", slog.String("code(hex)", hex.EncodeToString(manufacturer[:])))
+	case 0xd3: // 係数
+		slog.Info("係数", slog.Int("multiplier", int(edata.edt[0])))
+	case 0xd7: // 積算電力量有効桁数
+		slog.Info("積算電力量有効桁数", slog.Int("digits", int(edata.edt[0])))
+	case 0xe0: // 積算電力量計測値(正方向計測値)
 		cwh := binary.BigEndian.Uint32(edata.edt)
-		slog.Info("cumlative watt hour", slog.Uint64("Wh", uint64(cwh)))
+		slog.Info("積算電力量", slog.Uint64("Wh", uint64(cwh)))
+	case 0xe1: // 積算電力量単位(正方向、逆方向計測値)
+		var powersOfTen int
+		switch edata.edt[0] {
+		case 0x00:
+			powersOfTen = 0
+		case 0x01:
+			powersOfTen = -1
+		case 0x02:
+			powersOfTen = -2
+		case 0x03:
+			powersOfTen = -3
+		case 0x04:
+			powersOfTen = -4
+		case 0x0a:
+			powersOfTen = 1
+		case 0x0b:
+			powersOfTen = 2
+		case 0x0c:
+			powersOfTen = 3
+		case 0x0d:
+			powersOfTen = 4
+		default:
+			slog.Info("N/A")
+		}
+		s := fmt.Sprintf("%f kWh", math.Pow10(powersOfTen))
+		slog.Info("積算電力量単位", slog.String("unit", s))
 	case 0xe7: // 瞬時電力計測値
 		iwatt := int32(binary.BigEndian.Uint32(edata.edt))
-		slog.Info("instantious watt", slog.Int("W", int(iwatt)))
+		slog.Info("瞬時電力", slog.Int("W", int(iwatt)))
 	case 0xe8: // 瞬時電流計測値
 		r := binary.BigEndian.Uint16(edata.edt[0:2])
 		t := binary.BigEndian.Uint16(edata.edt[2:4])
 		iampereR := float32(int16(r)) / 10.0
 		if t == 0x7ffe {
 			//単相2線式
-			slog.Info("instantious ampere", slog.Float64("R", float64(iampereR)))
+			slog.Info("瞬時電流(単相2線式)", slog.Float64("R", float64(iampereR)))
 		} else {
 			iampereT := float32(t) / 10.0
 			slog.Info(
-				"instantious ampere",
+				"瞬時電流(単相3線式)",
 				slog.Float64("R", float64(iampereR)),
 				slog.Float64("T", float64(iampereT)),
 			)
 		}
 	default:
 		slog.Debug("Echonetlite",
-			slog.String("epc", strconv.FormatInt(int64(edata.epc), 16)),
-			slog.String("pdc", strconv.FormatInt(int64(edata.pdc), 16)),
-			slog.String("edt", hex.EncodeToString(edata.edt)),
+			slog.String("epc(hex)", strconv.FormatInt(int64(edata.epc), 16)),
+			slog.String("pdc(hex)", strconv.FormatInt(int64(edata.pdc), 16)),
+			slog.String("edt(hex)", hex.EncodeToString(edata.edt)),
 		)
 	}
 }
