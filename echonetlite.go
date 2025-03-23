@@ -214,15 +214,16 @@ func (e *EchonetliteEdata) Show() {
 	case 0xe7: // 瞬時電力計測値
 		s := fmt.Sprintf("N/A(epc:0x%02x)", e.epc)
 		if len(e.edt) >= 4 {
-			iwatt := binary.BigEndian.Uint32(e.edt)
+			iwatt := int32(binary.BigEndian.Uint32(e.edt)) // マイナスの値もある
 			s = strconv.FormatInt(int64(iwatt), 10)
 		}
 		slog.Info("edata", slog.String("瞬時電力", s+" W"))
 	case 0xe8: // 瞬時電流計測値
 		s := fmt.Sprintf("N/A(epc:0x%02x)", e.epc)
 		if len(e.edt) >= 4 {
-			r := binary.BigEndian.Uint16(e.edt[0:2])
-			t := binary.BigEndian.Uint16(e.edt[2:4])
+			r := int16(binary.BigEndian.Uint16(e.edt[0:2])) // マイナスの値もある
+			t := int16(binary.BigEndian.Uint16(e.edt[2:4])) // マイナスの値もある
+
 			if t == 0x7ffe { // 単相2線式
 				s = fmt.Sprintf("(1φ2W) %3d.%01d", r/10, r%10)
 			} else {
