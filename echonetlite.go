@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"strconv"
+	"strings"
 )
 
 type EchonetliteFrame struct {
@@ -22,7 +23,7 @@ type EchonetliteFrame struct {
 	edata []EchonetliteEdata
 }
 
-func (e EchonetliteFrame) Encode() []byte {
+func (e *EchonetliteFrame) Encode() []byte {
 	var b []byte
 	b = binary.BigEndian.AppendUint16(b, e.ehd)
 	b = binary.BigEndian.AppendUint16(b, e.tid)
@@ -41,21 +42,21 @@ type EchonetliteEdata struct {
 	edt []byte
 }
 
-func (e EchonetliteEdata) Encode() []byte {
+func (e *EchonetliteEdata) Encode() []byte {
 	var b []byte
 	b = append(b, e.epc, e.pdc)
 	b = append(b, e.edt...)
 	return b
 }
 
-func ParseEchonetliteFrame(data []byte) (EchonetliteFrame, error) {
+func ParseEchonetliteFrame(data []byte) (*EchonetliteFrame, error) {
 	if len := len(data); len <= 12 {
-		return EchonetliteFrame{}, fmt.Errorf("bad length(%d)", len)
+		return nil, fmt.Errorf("bad length(%d)", len)
 	}
 	//
 	ehd := binary.BigEndian.Uint16(data[0:2])
 	if ehd != 0x1081 {
-		return EchonetliteFrame{}, fmt.Errorf("ehd:%x this is not an echonetlite frame", ehd)
+		return nil, fmt.Errorf("ehd:%x this is not an echonetlite frame", ehd)
 	}
 	tid := binary.BigEndian.Uint16(data[2:4])
 	seoj := data[4:7]
@@ -73,7 +74,7 @@ func ParseEchonetliteFrame(data []byte) (EchonetliteFrame, error) {
 		props = props[2+props[1]:]
 	}
 	//
-	return EchonetliteFrame{
+	return &EchonetliteFrame{
 		ehd:   ehd,
 		tid:   tid,
 		seoj:  [3]byte(seoj),
@@ -84,100 +85,154 @@ func ParseEchonetliteFrame(data []byte) (EchonetliteFrame, error) {
 	}, nil
 }
 
-func ShowEchonetliteFrame(frame EchonetliteFrame) {
-	switch frame.esv {
+func (e *EchonetliteFrame) Show() {
+	n := len(e.edata)
+	switch e.esv {
+	case 0x52: // Get_SNA
+		slog.Info("プロパティ値読み出し不可応答", slog.Int("N", n))
+	case 0x53: // INF_SNA
+		slog.Info("プロパティ値通知不可応答", slog.Int("N", n))
+	case 0x71: // Set_res
+		slog.Info("プロパティ値書き込み応答", slog.Int("N", n))
 	case 0x72: // Get_res
-		for _, v := range frame.edata {
-			ShowEdataGetResponse(v)
-		}
+		slog.Info("プロパティ値読み出し応答", slog.Int("N", n))
 	case 0x73: // INF
-		fallthrough
+		slog.Info("プロパティ値通知", slog.Int("N", n))
 	default:
-		slog.Debug("Echonetlite", slog.Any("frame", frame))
+		slog.Debug("よくわからないESV値", slog.Any("frame", e))
+	}
+	for i := 0; i < n; i++ {
+		e.edata[i].Show()
 	}
 }
 
-func ShowEdataGetResponse(edata EchonetliteEdata) {
-	switch edata.epc {
+// EDATA値を表示する
+func (e *EchonetliteEdata) Show() {
+	switch e.epc {
 	case 0x80: // 動作状態
-		switch edata.edt[0] {
-		case 0x30:
-			slog.Info("動作中")
-		case 0x31:
-			slog.Info("未動作")
-		default:
-			slog.Info("N/A")
+		s := fmt.Sprintf("N/A(epc:0x%02x)", e.epc)
+		switch {
+		case e.edt[0] == 0x30:
+			s = "動作中"
+		case e.edt[0] == 0x31:
+			s = "未動作"
 		}
-	case 0x81: // 設置場所
+		slog.Info("edata", slog.String("動作状態", s))
 	case 0x88: // 異常発生状態
-		switch edata.edt[0] {
-		case 0x41:
-			slog.Info("異常発生あり")
-		case 0x42:
-			slog.Info("異常発生なし")
-		default:
-			slog.Info("N/A")
+		s := fmt.Sprintf("N/A(epc:0x%02x)", e.epc)
+		switch {
+		case e.edt[0] == 0x41:
+			s = "異常発生あり"
+		case e.edt[0] == 0x42:
+			s = "異常発生なし"
 		}
+		slog.Info("edata", slog.String("異常発生状態", s))
 	case 0x8a: // メーカーコード
-		manufacturer := [3]byte{}
-		copy(manufacturer[:], edata.edt)
-		slog.Info("製造者", slog.String("code(hex)", hex.EncodeToString(manufacturer[:])))
+		s := fmt.Sprintf("N/A(epc:0x%02x)", e.epc)
+		if len(e.edt) >= 3 {
+			manufacturer := [3]byte{}
+			copy(manufacturer[:], e.edt)
+			s = hex.EncodeToString(manufacturer[:])
+		}
+		slog.Info("edata", slog.String("製造者コード(hex)", s))
 	case 0xd3: // 係数
-		slog.Info("係数", slog.Int("multiplier", int(edata.edt[0])))
+		s := fmt.Sprintf("N/A(epc:0x%02x)", e.epc)
+		if len(e.edt) >= 1 {
+			s = strconv.FormatInt(int64(e.edt[0]), 10)
+		}
+		slog.Info("edata", slog.String("係数", s))
 	case 0xd7: // 積算電力量有効桁数
-		slog.Info("積算電力量有効桁数", slog.Int("digits", int(edata.edt[0])))
+		s := fmt.Sprintf("N/A(epc:0x%02x)", e.epc)
+		if len(e.edt) >= 1 {
+			s = strconv.FormatInt(int64(e.edt[0]), 10)
+		}
+		slog.Info("edata", slog.String("積算電力量有効桁数", s+" 桁"))
 	case 0xe0: // 積算電力量計測値(正方向計測値)
-		cwh := binary.BigEndian.Uint32(edata.edt)
-		slog.Info("積算電力量", slog.Uint64("Wh", uint64(cwh)))
+		s := fmt.Sprintf("N/A(epc:0x%02x)", e.epc)
+		if len(e.edt) >= 4 {
+			cwh := binary.BigEndian.Uint32(e.edt)
+			s = strconv.FormatInt(int64(cwh), 10)
+		}
+		slog.Info("edata", slog.String("積算電力量", s))
 	case 0xe1: // 積算電力量単位(正方向、逆方向計測値)
 		var powersOfTen int
-		switch edata.edt[0] {
-		case 0x00:
+		switch {
+		case e.edt[0] == 0x00:
 			powersOfTen = 0
-		case 0x01:
+		case e.edt[0] == 0x01:
 			powersOfTen = -1
-		case 0x02:
+		case e.edt[0] == 0x02:
 			powersOfTen = -2
-		case 0x03:
+		case e.edt[0] == 0x03:
 			powersOfTen = -3
-		case 0x04:
+		case e.edt[0] == 0x04:
 			powersOfTen = -4
-		case 0x0a:
+		case e.edt[0] == 0x0a:
 			powersOfTen = 1
-		case 0x0b:
+		case e.edt[0] == 0x0b:
 			powersOfTen = 2
-		case 0x0c:
+		case e.edt[0] == 0x0c:
 			powersOfTen = 3
-		case 0x0d:
+		case e.edt[0] == 0x0d:
 			powersOfTen = 4
 		default:
-			slog.Info("N/A")
+			powersOfTen = 0xff
 		}
 		s := fmt.Sprintf("%f kWh", math.Pow10(powersOfTen))
-		slog.Info("積算電力量単位", slog.String("unit", s))
-	case 0xe7: // 瞬時電力計測値
-		iwatt := int32(binary.BigEndian.Uint32(edata.edt))
-		slog.Info("瞬時電力", slog.Int("W", int(iwatt)))
-	case 0xe8: // 瞬時電流計測値
-		r := binary.BigEndian.Uint16(edata.edt[0:2])
-		t := binary.BigEndian.Uint16(edata.edt[2:4])
-		iampereR := float32(int16(r)) / 10.0
-		if t == 0x7ffe {
-			//単相2線式
-			slog.Info("瞬時電流(単相2線式)", slog.Float64("R", float64(iampereR)))
-		} else {
-			iampereT := float32(t) / 10.0
-			slog.Info(
-				"瞬時電流(単相3線式)",
-				slog.Float64("R", float64(iampereR)),
-				slog.Float64("T", float64(iampereT)),
-			)
+		slog.Info("edata", slog.String("積算電力量単位", s))
+	case 0xe2: // 積算電力量計測値履歴1 (正方向計測値)
+		s := fmt.Sprintf("N/A(epc:0x%02x)", e.epc)
+		if len(e.edt) >= 194 {
+			day := binary.BigEndian.Uint16(e.edt[0:2])
+			var ss [48]string
+			for i := 0; i < 48; i++ {
+				v := binary.BigEndian.Uint32(e.edt[2+4*i:])
+				if v == 0xfffffffe {
+					ss[i] = fmt.Sprintf("%8s", "N/A")
+				} else {
+					ss[i] = fmt.Sprintf("%8d", v)
+				}
+			}
+			s = fmt.Sprintf("%d日前[", day) + strings.Join(ss[:], ",") + "]"
 		}
+		slog.Info("edata", slog.String("積算電力量計測値履歴1 (正方向計測値)", s))
+	case 0xe7: // 瞬時電力計測値
+		s := fmt.Sprintf("N/A(epc:0x%02x)", e.epc)
+		if len(e.edt) >= 4 {
+			iwatt := binary.BigEndian.Uint32(e.edt)
+			s = strconv.FormatInt(int64(iwatt), 10)
+		}
+		slog.Info("edata", slog.String("瞬時電力", s+" W"))
+	case 0xe8: // 瞬時電流計測値
+		s := fmt.Sprintf("N/A(epc:0x%02x)", e.epc)
+		if len(e.edt) >= 4 {
+			r := binary.BigEndian.Uint16(e.edt[0:2])
+			t := binary.BigEndian.Uint16(e.edt[2:4])
+			if t == 0x7ffe { // 単相2線式
+				s = fmt.Sprintf("(1φ2W) %3d.%01d", r/10, r%10)
+			} else {
+				s = fmt.Sprintf("(1φ3W) R:%3d.%01d, T:%3d.%01d", r/10, r%10, t/10, t%10)
+			}
+		}
+		slog.Info("edata", slog.String("瞬時電流", s))
+	case 0xea: // 定時積算電力量計測値(正方向計測値)
+		s := "N/A"
+		if len(e.edt) >= 11 {
+			year := binary.BigEndian.Uint16(e.edt[0:2])
+			month := e.edt[2]
+			day := e.edt[3]
+			hour := e.edt[4]
+			minute := e.edt[5]
+			second := e.edt[6]
+			cwh := binary.BigEndian.Uint32(e.edt[7:])
+			s = fmt.Sprintf("%04d/%02d/%02d %02d:%02d:%02d (%8d)", year, month, day, hour, minute, second, cwh)
+		}
+		slog.Info("edata", slog.String("定時積算電力量計測値(正方向計測値)", s))
 	default:
-		slog.Debug("Echonetlite",
-			slog.String("epc(hex)", strconv.FormatInt(int64(edata.epc), 16)),
-			slog.String("pdc(hex)", strconv.FormatInt(int64(edata.pdc), 16)),
-			slog.String("edt(hex)", hex.EncodeToString(edata.edt)),
+		slog.Debug("edata",
+			slog.String("epc(hex)", strconv.FormatInt(int64(e.epc), 16)),
+			slog.String("pdc(hex)", strconv.FormatInt(int64(e.pdc), 16)),
+			slog.String("edt(hex)", hex.EncodeToString(e.edt)),
 		)
 	}
 }

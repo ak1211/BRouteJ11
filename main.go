@@ -528,7 +528,7 @@ func run(settingsFileName string, serialName string) error {
 			slog.Error("read", "err", err)
 			return
 		}
-		ShowEchonetliteFrame(frame)
+		frame.Show()
 	}
 
 	//
@@ -549,12 +549,12 @@ func run(settingsFileName string, serialName string) error {
 		elSmartmeterProps := []EchonetliteEdata{
 			// go言語では初期値0なのでpdc,edtは省略する
 			{epc: 0x80}, // 動作状態
-			{epc: 0x81}, // 設置場所
 			{epc: 0x88}, // 異常発生状態
 			{epc: 0x8a}, // メーカーコード
-			{epc: 0xd3}, // 係数
+			{epc: 0xd3}, // 係数(存在しない場合は×1倍)
 			{epc: 0xd7}, // 積算電力量有効桁数
 			{epc: 0xe1}, // 積算電力量単位(正方向、逆方向計測値)
+			{epc: 0xea}, // 定時積算電力量計測値(正方向計測値)
 		}
 		for _, item := range elSmartmeterProps {
 			elFrame := EchonetliteFrame{
@@ -566,13 +566,44 @@ func run(settingsFileName string, serialName string) error {
 				opc:   0x01,                      // 1つ
 				edata: []EchonetliteEdata{item},
 			}
-			buf := elFrame.Encode()
-			err := transmit(conn, buf)
+			err := transmit(conn, elFrame.Encode())
 			if err != nil {
 				return err
 			}
 			time.Sleep(1000 * time.Millisecond)
 		}
+	}
+
+	// 今日の積算履歴を収集してみる
+	if true {
+		rqSetC := EchonetliteFrame{
+			ehd:   0x1081,
+			tid:   0x0001,
+			seoj:  [3]byte{0x05, 0xff, 0x01},                               // home controller
+			deoj:  [3]byte{0x02, 0x88, 0x01},                               // smartmeter
+			esv:   0x61,                                                    // プロパティ値書き込み要求(応答要)
+			opc:   0x01,                                                    // 1つ
+			edata: []EchonetliteEdata{{epc: 0xe5, pdc: 1, edt: []byte{0}}}, // 積算履歴収集日1(edt=0は今日)
+		}
+		err := transmit(conn, rqSetC.Encode())
+		if err != nil {
+			return err
+		}
+		time.Sleep(1000 * time.Millisecond)
+		rqGet := EchonetliteFrame{
+			ehd:   0x1081,
+			tid:   0x0001,
+			seoj:  [3]byte{0x05, 0xff, 0x01},       // home controller
+			deoj:  [3]byte{0x02, 0x88, 0x01},       // smartmeter
+			esv:   0x62,                            // プロパティ値読み出し要求
+			opc:   0x01,                            // 1つ
+			edata: []EchonetliteEdata{{epc: 0xe2}}, // 積算電力量計測値履歴1
+		}
+		err = transmit(conn, rqGet.Encode())
+		if err != nil {
+			return err
+		}
+		time.Sleep(1000 * time.Millisecond)
 	}
 
 	// 積算電力量を得る
