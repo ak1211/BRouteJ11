@@ -389,15 +389,16 @@ func run(settingsFileName string, serialName string) error {
 			if r.Header.CommandCode == 0x2053 {
 				done = true
 				if r.Data[0] == 1 {
-					var channel uint8 = r.Data[1]
-					var panId uint16 = binary.BigEndian.Uint16(r.Data[2:4])
-					var macAddress [8]byte = [8]byte(r.Data[4:12])
+					// channel,panid,macaddressは設定ファイルにあるので表示しない
+					//					var channel uint8 = r.Data[1]
+					//					var panId uint16 = binary.BigEndian.Uint16(r.Data[2:4])
+					//					var macAddress [8]byte = [8]byte(r.Data[4:12])
 					var rssi int8 = int8(r.Data[12])
 					slog.Debug("CommandBRouteStart",
 						slog.String("result", "ok"),
-						slog.Int("channel", int(channel)),
-						slog.String("panId", strconv.FormatInt(int64(panId), 16)),
-						slog.String("macAddress", hex.EncodeToString(macAddress[:])),
+						//						slog.Int("channel", int(channel)),
+						//						slog.String("panId", strconv.FormatInt(int64(panId), 16)),
+						//						slog.String("macAddress", hex.EncodeToString(macAddress[:])),
 						slog.Int("rssi", int(rssi)),
 					)
 				} else {
@@ -463,11 +464,10 @@ func run(settingsFileName string, serialName string) error {
 			if r.Header.CommandCode == 0x6028 {
 				done = true
 				result, macAddress := parseNotifyPanaResult(r)
+				_ = macAddress // macAddressは設定ファイルにあるので、表示しない
 				switch result {
 				case 1: // 認証成功
-					slog.Info("connection successful",
-						slog.String("macAddress", hex.EncodeToString(macAddress[:])),
-					)
+					slog.Info("connection successful") //						slog.String("macAddress", hex.EncodeToString(macAddress[:])),
 				case 2: // 認証失敗
 					return errors.New("PANA auth failed")
 				case 3: // 応答なし
@@ -585,11 +585,6 @@ func run(settingsFileName string, serialName string) error {
 			opc:   0x01,                                                    // 1つ
 			edata: []EchonetliteEdata{{epc: 0xe5, pdc: 1, edt: []byte{0}}}, // 積算履歴収集日1(edt=0は今日)
 		}
-		err := transmit(conn, rqSetC.Encode())
-		if err != nil {
-			return err
-		}
-		time.Sleep(1000 * time.Millisecond)
 		rqGet := EchonetliteFrame{
 			ehd:   0x1081,
 			tid:   0x0001,
@@ -599,11 +594,14 @@ func run(settingsFileName string, serialName string) error {
 			opc:   0x01,                            // 1つ
 			edata: []EchonetliteEdata{{epc: 0xe2}}, // 積算電力量計測値履歴1
 		}
-		err = transmit(conn, rqGet.Encode())
-		if err != nil {
-			return err
+		elFrames := []EchonetliteFrame{rqSetC, rqGet}
+		for _, rq := range elFrames {
+			err = transmit(conn, rq.Encode())
+			if err != nil {
+				return err
+			}
+			time.Sleep(1000 * time.Millisecond)
 		}
-		time.Sleep(1000 * time.Millisecond)
 	}
 
 	// 積算電力量を得る
@@ -718,6 +716,30 @@ func (c *ConnEchonetlite) Read(b []byte) (int, error) {
 	c.rssi = int8(r.Data[24])
 	c.dataBytes = binary.BigEndian.Uint16(r.Data[25:27])
 	c.data = r.Data[27:]
+	senderAddressType := "N/A"
+	switch c.senderAddressType {
+	case 0x00:
+		senderAddressType = "ユニキャスト"
+	case 0x01:
+		senderAddressType = "マルチキャスト"
+	}
+	secure := "N/A"
+	switch c.secure {
+	case 0x01:
+		secure = "暗号化なし"
+	case 0x02:
+		secure = "暗号化あり"
+	}
+	slog.Debug("Received",
+		//		slog.Int("senderPort", int(c.senderPort)),
+		//		slog.Int("dstPort", int(c.dstPort)),
+		//		slog.Int("panId", int(c.panId)),
+		slog.String("senderAddressType", senderAddressType),
+		slog.String("secure", secure),
+		slog.Int("rssi", int(c.rssi)),
+		slog.Int("dataBytes", int(c.dataBytes)),
+		slog.String("data(hex)", hex.EncodeToString(c.data)),
+	)
 	return copy(b, c.data), nil
 }
 
@@ -759,8 +781,8 @@ func readJ11ProtocolDatagram(ctx context.Context, rd io.Reader) (*J11Datagram, e
 	var preamble uint32
 	for preamble != UniqueCodeResponseCommand {
 		var b [1]byte
-		_, err := rd.Read(b[:])
-		if err == io.EOF { // 読み取りデータ不足
+		n, err := rd.Read(b[:])
+		if n == 0 || err == io.EOF { // 読み取りデータ不足
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -777,7 +799,7 @@ func readJ11ProtocolDatagram(ctx context.Context, rd io.Reader) (*J11Datagram, e
 	binary.BigEndian.PutUint32(buf[:], preamble)
 	for i := 4; i < J11DatagramHeaderBytes; {
 		n, err := rd.Read(buf[i:])
-		if err == io.EOF { // 読み取りデータ不足
+		if n == 0 || err == io.EOF { // 読み取りデータ不足
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -805,7 +827,7 @@ func readJ11ProtocolDatagram(ctx context.Context, rd io.Reader) (*J11Datagram, e
 	data := make([]byte, dataBytes)
 	for i := 0; i < int(dataBytes); {
 		n, err := rd.Read(data[i:])
-		if err == io.EOF { // 読み取りデータ不足
+		if n == 0 || err == io.EOF { // 読み取りデータ不足
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()

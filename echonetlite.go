@@ -88,16 +88,22 @@ func ParseEchonetliteFrame(data []byte) (*EchonetliteFrame, error) {
 func (e *EchonetliteFrame) Show() {
 	n := len(e.edata)
 	switch e.esv {
+	case 0x50: // SetI_SNA
+		slog.Info("SetI_SNAプロパティ値書き込み要求不可応答", slog.Int("N", n))
+	case 0x51: // SetC_SNA
+		slog.Info("SetC_SNAプロパティ値書き込み要求不可応答", slog.Int("N", n))
 	case 0x52: // Get_SNA
-		slog.Info("プロパティ値読み出し不可応答", slog.Int("N", n))
+		slog.Info("Get_SNAプロパティ値読み出し不可応答", slog.Int("N", n))
 	case 0x53: // INF_SNA
-		slog.Info("プロパティ値通知不可応答", slog.Int("N", n))
+		slog.Info("INF_SNAプロパティ値通知不可応答", slog.Int("N", n))
 	case 0x71: // Set_res
-		slog.Info("プロパティ値書き込み応答", slog.Int("N", n))
+		slog.Info("Set_resプロパティ値書き込み応答", slog.Int("N", n))
 	case 0x72: // Get_res
-		slog.Info("プロパティ値読み出し応答", slog.Int("N", n))
+		slog.Info("Get_resプロパティ値読み出し応答", slog.Int("N", n))
 	case 0x73: // INF
-		slog.Info("プロパティ値通知", slog.Int("N", n))
+		slog.Info("INFプロパティ値通知", slog.Int("N", n))
+	case 0x74: // INFC
+		slog.Info("INFCプロパティ値通知(応答要)", slog.Int("N", n))
 	default:
 		slog.Debug("よくわからないESV値", slog.Any("frame", e))
 	}
@@ -141,6 +147,15 @@ func (e *EchonetliteEdata) Show() {
 			s = strconv.FormatInt(int64(e.edt[0]), 10)
 		}
 		slog.Info("edata", slog.String("係数", s))
+	case 0xd5: // インスタンスリスト通知
+		var ss []string
+		for i := 1; i < len(e.edt); i += 3 {
+			ss = append(ss, hex.EncodeToString(e.edt[i:i+3]))
+		}
+		slog.Info("edata",
+			slog.String("インスタンスリスト",
+				fmt.Sprintf("%d個 [", e.edt[0])+strings.Join(ss, ",")+"]",
+			))
 	case 0xd7: // 積算電力量有効桁数
 		s := fmt.Sprintf("N/A(epc:0x%02x)", e.epc)
 		if len(e.edt) >= 1 {
